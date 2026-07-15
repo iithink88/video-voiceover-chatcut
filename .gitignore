@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+config.json
+.env
+*.log
+_vosk_model/
