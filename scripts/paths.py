@@ -85,24 +85,16 @@ def detect_paths():
     }
 
 
-# 依赖缺失时给中文提示，避免用户面对一堆看不懂的异常
+# 依赖缺失时给中文提示（仅返回核心依赖缺失，增强依赖不阻塞启动）
 def missing_hints(p):
     miss = []
-    if not os.path.isfile(os.path.join(p["tts_skill"], "build_video.py")):
-        miss.append(
-            "text-to-clonedvoice-video-full 技能：请在 WorkBuddy 中安装该技能，或把它的 scripts "
-            "目录放到 ~/.workbuddy/skills/text-to-clonedvoice-video-full/scripts"
-        )
+    # ffmpeg 是核心依赖（合并视频+字幕必须）
     if not p["ffmpeg_bin"] or not os.path.isfile(os.path.join(p["ffmpeg_bin"], "ffmpeg.exe")):
         miss.append(
             "ffmpeg：请安装 ffmpeg 并加入 PATH，或放到 %USERPROFILE%/bin/ffmpeg/"
             "ffmpeg-8.1.2-essentials_build/bin"
         )
-    if not p["vosk_model"] or not os.path.isdir(p["vosk_model"]):
-        miss.append(
-            "Vosk 中文模型：请双击『安装依赖.bat』自动下载，或设置环境变量 VOSK_MODEL 指向 "
-            "vosk-model-small-cn-0.22 目录"
-        )
+    # edge_tts 在运行时 import 检查（setup.py 会装），这里不重复检查
     return miss
 
 
