@@ -10,8 +10,8 @@ video-voiceover-chatcut 图形界面（tkinter）
   · 选文案（文件或粘贴）
   · 选播音人（edge-tts 中文音色下拉）
   · 拖语速滑块
-  · ① 生成口播视频（本地：edge-tts 配音 + 分镜渲染）
-  · ② 本地合成成品（ffmpeg：原画面 + 口播语音 + 字幕，无需 ChatCut）
+  · ① 生成配音（本地：edge-tts 文本→mp3，仅需 edge_tts 库）
+  · ② 本地合成成品（ffmpeg：原画面 + 口播语音 + 字幕，无需 ChatCut/Node/Vosk）
   · ③ 导出 ChatCut 工程（写 job 文件 + 复制指令，交给 AI 走 ChatCut 高质量合并）
 
 防闪退要点：入口 UTF-8 重配置；顶层 try/except 弹窗报错；重活放后台线程，UI 线程安全更新。
@@ -101,7 +101,7 @@ class App:
 
         bf = ttk.Frame(f)
         bf.grid(row=row, column=0, columnspan=4, sticky="w", pady=6)
-        self.btn_gen = ttk.Button(bf, text="▶ ① 生成口播视频", command=self.on_generate, width=18)
+        self.btn_gen = ttk.Button(bf, text="▶ ① 生成配音", command=self.on_generate, width=18)
         self.btn_gen.pack(side="left", padx=4)
         self.btn_merge = ttk.Button(bf, text="▶ ② 本地合成成品", command=self.on_merge, width=18)
         self.btn_merge.pack(side="left", padx=4)
@@ -219,9 +219,13 @@ class App:
 
     def _env(self):
         env = dict(os.environ)
-        env["PATH"] = DEFAULTS["ffmpeg_bin"] + os.pathsep + DEFAULTS["node_bin"] + os.pathsep + env.get("PATH", "")
+        # 核心流程只需要 ffmpeg；node/vosk 仅在完整版 text-to-clonedvoice-video-full 路径需要
+        ff = DEFAULTS.get("ffmpeg_bin")
+        if ff:
+            env["PATH"] = ff + os.pathsep + env.get("PATH", "")
         env["PYTHONIOENCODING"] = "utf-8"
-        env["VOSK_MODEL"] = DEFAULTS["vosk_model"]
+        if DEFAULTS.get("vosk_model"):
+            env["VOSK_MODEL"] = DEFAULTS["vosk_model"]
         return env
 
     # ---------- ① 生成口播视频 ----------
@@ -235,8 +239,8 @@ class App:
         txt = self.text_path.get()
         workdir = os.path.join(os.path.dirname(os.path.abspath(orig)), "_narration_work")
         os.makedirs(workdir, exist_ok=True)
-        out = os.path.join(workdir, "口播视频.mp4")
-        self.log_ui(f"[开始] 生成口播视频 → {out}")
+        out = os.path.join(workdir, "narration.mp3")
+        self.log_ui(f"[开始] 生成配音 → {out}")
         self.log_ui(f"       播音人={self._voice_id()}  语速={self.speed_var.get():.1f}x")
 
         env = self._env()
@@ -248,13 +252,12 @@ class App:
             "--output", out,
             "--voice", self._voice_id(),
             "--speed", str(self.speed_var.get()),
-            "--workdir", workdir,
         ], env, workdir)
 
-        self.narration_video = out
-        self.narration_mp3 = os.path.join(workdir, "narration.mp3")
-        self.log_ui(f"[完成] 口播视频：{out}")
-        self.log_ui(f"        下一步点『② 本地合成成品』或直接『③ 导出 ChatCut 工程』")
+        self.narration_video = out  # 兼容：此处实际是 mp3
+        self.narration_mp3 = out
+        self.log_ui(f"[完成] 配音已生成：{out}")
+        self.log_ui(f"        下一步点『② 本地合成成品』合并原视频+语音+字幕")
 
     # ---------- ② 本地合成成品 ----------
     def on_merge(self):
@@ -271,10 +274,16 @@ class App:
     def _do_merge(self):
         orig = self.original_path.get()
         txt = self.text_path.get()
-        mp3 = self.narration_mp3 or os.path.join(
-            os.path.dirname(os.path.abspath(self.narration_video)), "narration.mp3")
+        workdir = os.path.join(os.path.dirname(os.path.abspath(orig)), "_narration_work")
+        os.makedirs(workdir, exist_ok=True)
+        mp3 = self.narration_mp3 or os.path.join(workdir, "narration.mp3")
+
+        # 若还没生成配音，自动先生成
         if not os.path.exists(mp3):
-            raise RuntimeError(f"找不到口播配音：{mp3}")
+            self.log_ui("[提示] 尚未生成配音，先自动执行①……")
+            self._do_generate()
+            if not os.path.exists(mp3):
+                raise RuntimeError("配音未生成，无法合成。")
         base = os.path.splitext(os.path.basename(orig))[0]
         out = os.path.join(os.path.dirname(os.path.abspath(orig)), f"{base}-口播版.mp4")
         self.log_ui(f"[开始] 本地合成成品 → {out}")
@@ -341,14 +350,34 @@ class App:
 def main():
     try:
         root = tk.Tk()
-        miss = missing_hints(detect_paths())
-        if miss:
-            messagebox.showerror(
-                "缺少依赖",
-                "使用前请先准备以下依赖：\n\n" + "\n".join("• " + m for m in miss) +
-                "\n\n可以双击本技能目录下的『安装依赖.bat』一键安装。")
-            root.destroy()
-            sys.exit(1)
+        # 轻量级启动检查：只确认 python 可用，不强制要求 text-to-clonedvoice-video-full / vosk
+        # （核心流程 ①② 只需 edge_tts + ffmpeg，缺了会在运行时给友好提示）
+        py = DEFAULTS.get("venv_py", "")
+        if not py or not os.path.isfile(py):
+            # 尝试找系统 python
+            import shutil
+            py = shutil.which("python") or shutil.which("python3") or ""
+        try:
+            import edge_tts
+            has_edge = True
+        except ImportError:
+            has_edge = False
+
+        warnings = []
+        if not has_edge:
+            warnings.append("• 缺少 edge_tts 库 → 请双击『安装依赖.bat』安装")
+        ff = DEFAULTS.get("ffmpeg_bin", "")
+        if not ff or not os.path.isfile(os.path.join(ff, "ffmpeg.exe")):
+            warnings.append("• 缺少 ffmpeg → 请安装并加入 PATH")
+
+        if warnings:
+            messagebox.showwarning(
+                "部分依赖缺失",
+                "以下依赖暂时缺少，但不影响基本使用（运行时再提示）：\n\n"
+                + "\n".join(warnings)
+                + "\n\n建议双击『安装依赖.bat』一键安装。")
+            # 不退出，让用户仍可使用已有功能
+
         App(root)
         root.mainloop()
     except Exception as e:
