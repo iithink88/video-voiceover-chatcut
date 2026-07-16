@@ -151,7 +151,21 @@ PY="$HOME/.workbuddy/binaries/python/envs/default/Scripts/python.exe"
   --output  "原视频-口播版.mp4"
 ```
 
-`merge_local.py` 做的事：ffprobe 取配音时长 → 文案按句切分均匀铺到字幕时间轴（生成临时 `.srt`）→ ffmpeg 原画面静音 + 烧录字幕（竖屏大字号、白字黑描边、底部居中）+ 混入配音（配音短则补静音，长则顺延）。成品与 ChatCut 路径一致：**原视频画面 + 朗读语音 + 同步字幕**。
+`merge_local.py` 做的事：ffprobe 取配音时长 → 文案按句切分均匀铺到字幕时间轴（生成临时 `.srt`）→ ffmpeg 原画面静音 + 烧录字幕 + 混入配音（配音短则补静音，长则顺延）。成品与 ChatCut 路径一致：**原视频画面 + 朗读语音 + 同步字幕**。
+
+### 字幕默认样式（用户确认，勿随意改小）
+
+不传 `--fontsize` 时按以下默认出片（已固化进脚本）：
+
+| 属性 | 默认值 | 说明 |
+|------|--------|------|
+| 字号 | ≈ **60px 实际像素** | 1920p 竖屏下 FontSize=9；公式 `fs = max(4.0, round(60×288/vh))` 自适应分辨率 |
+| 换行 | **智能换行**（不设 WrapStyle） | 短句一行、长句自动折多行 |
+| 位置 | 底部居中 | `Alignment=2, MarginV=40` |
+| 颜色 | 白字黑描边 | `PrimaryColour=&H00FFFFFF, OutlineColour=&H00000000, Outline=2, Bold=1` |
+| 原则 | 不遮挡画面主体 | 字号克制、底部留白 |
+
+如需临时调整：`--fontsize 12`（更大）/ `--fontsize 6`（更小）。**注意这是 libass 缩放值，不是像素值**，换算见下方坑位。
 
 ## 已知限制 / 坑位
 
@@ -159,6 +173,8 @@ PY="$HOME/.workbuddy/binaries/python/envs/default/Scripts/python.exe"
 - **原视频比例必须手动匹配**（2.3）：ChatCut 创建项目默认横屏，竖屏原视频不改正会被压黑边。
 - **口播视频转录是异步的**：上传后 `transcription` 可能先显示 `skipped`/`pending`，稍等再查 `read_project(assetId=A2)` 直到 `ready` 才启用字幕。
 - **edit_item 的 adds 是一次性原子提交**：两个视频一起放，分别设 `V1 muted / V2 opacity:0 muted:false`。
+- **ffmpeg/libass 的 FontSize 不是像素值**（本地合并路径踩坑）：libass 按内部默认 PlayRes(384×288) 缩放，`实际像素 = FontSize × (video_height / 288)`。例：1920p 视频 FontSize=9 ≈ 60px，FontSize=28 ≈ 186px（巨字！）。**千万不要加 PlayResX/Y**（会破坏这个换算关系，反而渲染异常）。要多大的字先用公式反推 FontSize。
+- **generate_voice_edgetts.py 的 `--rate` 参数 bug**：未传给 `edge_tts.Communicate()`，调语速无效。需调语速时直接用 edge-tts 带 `rate=` 合成，或用 make_narration.py 的 `--speed`。
 - **upload-media.mjs 必须设 FFMPEG_PATH / FFPROBE_PATH**，否则 ffmpeg probe 失败。
 - **文本文件 UTF-8 无 BOM**；带 BOM 首字会异常。
 - 若原视频本身有声音且想保留，把 2.6 原视频的 `muted` 改为 `false`（会与原口播语音叠加）。
