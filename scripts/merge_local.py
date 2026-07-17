@@ -12,7 +12,7 @@
 做法：
   1. 用 ffprobe 取配音时长 + 原视频分辨率/时长
   2. 把文案按句切分，均匀铺到配音时长上 → 生成 .srt（存临时 ASCII 路径，规避中文路径坑）
-  3. ffmpeg：原视频画面静音 + 烧录字幕 + 混入配音（短则补静音，长则顺延）
+  3. ffmpeg：原视频画面静音 + 烧录字幕 + 混入配音（短则补静音，长则按视频时长掐断配音，不冻结）
 输出与 ChatCut 路径一致的成品：原视频画面 + 口播语音 + 口播字幕。
 
 注：本脚本不依赖 ChatCut MCP，可独立双击运行（GUI 在无 ChatCut 时也能出片）。
@@ -113,8 +113,23 @@ def main():
     # 相对文件名（无盘符冒号），ffmpeg 以 srt_dir 为 cwd 解析
     vf = f"subtitles={srt_name}:force_style='{style}'"
 
-    # 最终时长 = 原视频与配音的较大者（配音短则补静音，长则顺延）
-    final_dur = max(orig_dur, audio_dur) if orig_dur > 0 else audio_dur
+    # 最终时长以【原视频】为基准（音画同步修复 2026-07-17）：
+    # 原视频画面时长固定，配音必须跟着画面走。配音比视频长则按视频时长掐断配音
+    # （不再用最后一帧冻结补长，避免"声音还在念、画面已卡住"）；配音比视频短则补静音。
+    # 配合 make_narration.py 的 --target-duration 预适配，两者等长 → 严格同步。
+    if orig_dur > 0:
+        final_dur = orig_dur
+        dev = abs(audio_dur - orig_dur) / orig_dur
+        if dev > 0.08:
+            if audio_dur > orig_dur:
+                print(f"[提示] 配音({audio_dur:.1f}s) 比原视频({orig_dur:.1f}s) 长，"
+                      f"已按视频时长掐断配音——画面不再冻结。建议先用『① 生成配音』让其自动适配原视频。",
+                      flush=True)
+            else:
+                print(f"[提示] 配音({audio_dur:.1f}s) 比原视频({orig_dur:.1f}s) 短，"
+                      f"已补静音至视频时长。建议先用『① 生成配音』让其自动适配原视频。", flush=True)
+    else:
+        final_dur = audio_dur
 
     out_dir = os.path.dirname(os.path.abspath(args.output))
     os.makedirs(out_dir, exist_ok=True)
