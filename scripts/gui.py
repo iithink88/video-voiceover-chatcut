@@ -10,7 +10,7 @@ video-voiceover-chatcut 图形界面（tkinter）
   · 选文案（文件或粘贴）
   · 选播音人（edge-tts 中文音色下拉）
   · 拖语速滑块
-  · ① 生成配音（本地：edge-tts 文本→mp3，仅需 edge_tts 库）
+  · ① 生成配音（本地：edge-tts 文本→mp3，自动适配原视频时长，仅需 edge_tts 库）
   · ② 本地合成成品（ffmpeg：原画面 + 口播语音 + 字幕，无需 ChatCut/Node/Vosk）
   · ③ 导出 ChatCut 工程（写 job 文件 + 复制指令，交给 AI 走 ChatCut 高质量合并）
 
@@ -174,6 +174,23 @@ class App:
                 return vid
         return VOICES[0][1]
 
+    def _orig_dur(self):
+        """探测原视频时长（秒），用于让配音适配原视频、实现音画同步。"""
+        ff = DEFAULTS.get("ffmpeg_bin")
+        if not ff:
+            return 0.0
+        fp = os.path.join(ff, "ffprobe.exe")
+        if not os.path.isfile(fp):
+            return 0.0
+        try:
+            out = subprocess.check_output(
+                [fp, "-v", "error", "-show_entries", "format=duration",
+                 "-of", "default=noprint_wrappers=1:nokey=1", self.original_path.get()],
+                encoding="utf-8", errors="replace").strip()
+            return float(out)
+        except Exception:
+            return 0.0
+
     # ---------- 运行包装（后台线程） ----------
     def _run_thread(self, target, btn_enable=True):
         if self.busy:
@@ -246,13 +263,19 @@ class App:
         env = self._env()
         py = DEFAULTS["venv_py"]
         make = os.path.join(SCRIPTS, "make_narration.py")
-        self._run_capture([
+        # 音画同步：取原视频时长，让配音自动适配（与原视频等长）
+        target = self._orig_dur()
+        cmd = [
             py, make,
             "--text", txt,
             "--output", out,
             "--voice", self._voice_id(),
             "--speed", str(self.speed_var.get()),
-        ], env, workdir)
+        ]
+        if target and target > 0:
+            cmd += ["--target-duration", f"{target:.3f}"]
+            self.log_ui(f"       原视频时长={target:.1f}s → 配音将自动适配到此长度（音画同步）")
+        self._run_capture(cmd, env, workdir)
 
         self.narration_video = out  # 兼容：此处实际是 mp3
         self.narration_mp3 = out
